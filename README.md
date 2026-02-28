@@ -140,8 +140,8 @@ Task succeeded in 0.035s
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
-cd celery-python
+git clone https://github.com/devdogukan/telemetry-ingest-demo
+cd telemetry-ingest-demo
 ```
 
 ### 2. Create Environment File
