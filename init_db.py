@@ -22,7 +22,7 @@ def init_db():
         conn.commit()
         
     except Exception as ex:
-        print(f"An error occured while running `init_db()` {ex}")
+        print(f"An error occured while running `init_db()`: {ex}")
     finally:
         cur.close()
         conn.close()
