@@ -8,9 +8,10 @@ import logging
 from typing import Tuple, Dict, Any
 
 from flask import Flask, request, jsonify
-from werkzeug.exceptions import BadRequest
+from pydantic import ValidationError
 
 from flask_app.tasks_with_batch import enqueue_telemetry
+from flask_app.schemas import TelemetryRequest, TelemetryResponse, ErrorResponse
 
 # Configure logging
 logging.basicConfig(
@@ -80,96 +81,59 @@ def register_routes(app: Flask) -> None:
         
         Returns:
             Tuple: JSON response and status code
-            
-        Raises:
-            BadRequest: If request data is invalid
         """
         try:
             # Validate content type
             if not request.is_json:
                 logger.warning("Received non-JSON request")
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "Content-Type must be application/json"
-                }), 400
+                error = ErrorResponse(
+                    error="Bad Request",
+                    message="Content-Type must be application/json"
+                )
+                return jsonify(error.model_dump()), 400
             
-            data = request.json
-            
-            # Validate required fields
-            if not data:
-                logger.warning("Received empty request body")
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "Request body cannot be empty"
-                }), 400
-            
-            if "sensor_id" not in data:
-                logger.warning("Missing sensor_id in request")
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "Missing required field: sensor_id"
-                }), 400
-            
-            if "temperature" not in data:
-                logger.warning("Missing temperature in request")
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "Missing required field: temperature"
-                }), 400
-            
-            # Validate data types and values
-            sensor_id = str(data["sensor_id"]).strip()
-            if not sensor_id:
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "sensor_id cannot be empty"
-                }), 400
-            
+            # Validate and parse request data with Pydantic
             try:
-                temperature = float(data["temperature"])
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid temperature value: {data['temperature']}")
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "temperature must be a valid number"
-                }), 400
-            
-            # Validate temperature range (optional but recommended)
-            if temperature < -273.15:  # Absolute zero
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "temperature cannot be below absolute zero (-273.15°C)"
-                }), 400
-            
-            if temperature > 1000:  # Reasonable upper limit
-                logger.warning(f"Unusually high temperature: {temperature}°C from {sensor_id}")
+                telemetry = TelemetryRequest(**request.json)
+            except ValidationError as e:
+                logger.warning(f"Validation error: {e}")
+                error = ErrorResponse(
+                    error="Validation Error",
+                    message="Invalid request data",
+                    details={"errors": e.errors()}
+                )
+                return jsonify(error.model_dump()), 400
             
             # Enqueue the telemetry data
-            task = enqueue_telemetry.delay(sensor_id, temperature)
+            task = enqueue_telemetry.delay(
+                telemetry.sensor_id, 
+                telemetry.temperature
+            )
             
-            logger.info(f"Telemetry queued: sensor={sensor_id}, temp={temperature}°C, task_id={task.id}")
+            logger.info(
+                f"Telemetry queued: sensor={telemetry.sensor_id}, "
+                f"temp={telemetry.temperature}°C, task_id={task.id}"
+            )
             
-            return jsonify({
-                "status": "queued",
-                "message": "Telemetry data received and queued for processing",
-                "task_id": task.id,
-                "data": {
-                    "sensor_id": sensor_id,
-                    "temperature": temperature
+            # Create response using Pydantic model
+            response = TelemetryResponse(
+                status="queued",
+                message="Telemetry data received and queued for processing",
+                task_id=task.id,
+                data={
+                    "sensor_id": telemetry.sensor_id,
+                    "temperature": telemetry.temperature
                 }
-            }), 202
+            )
             
-        except BadRequest as e:
-            logger.warning(f"Bad request: {e}")
-            return jsonify({
-                "error": "Bad Request",
-                "message": str(e)
-            }), 400
+            return jsonify(response.model_dump()), 202
+            
         except Exception as e:
             logger.error(f"Error processing telemetry request: {e}", exc_info=True)
-            return jsonify({
-                "error": "Internal Server Error",
-                "message": "Failed to process telemetry data"
-            }), 500
+            error = ErrorResponse(
+                error="Internal Server Error",
+                message="Failed to process telemetry data"
+            )
+            return jsonify(error.model_dump()), 500
     
     logger.info("All routes registered successfully")
